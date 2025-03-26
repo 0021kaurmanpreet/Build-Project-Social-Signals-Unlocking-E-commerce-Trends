@@ -1,0 +1,181 @@
+-- Query to get the total number of distinct orders (in thousands)
+SELECT COUNT(DISTINCT OrderID)/1000 AS TotalDistinctOrders
+FROM fact_order_items;
+
+-- Query to calculate total revenue (in billions) from distinct order payments
+SELECT 
+    SUM(distinct_orders.PaymentValue) / 1e9 AS Total_Revenue
+FROM (
+    SELECT DISTINCT foi.OrderID, foi.PaymentValue
+    FROM fact_order_items foi
+) AS distinct_orders;
+
+-- Query to calculate the average number of installments per purchase
+WITH RECURSIVE numbers AS (
+    SELECT 1 AS n
+    UNION ALL
+    SELECT n + 1 FROM numbers WHERE n <= (
+        SELECT MAX(LENGTH(PaymentInstallments) - LENGTH(REPLACE(PaymentInstallments, ',', '')) + 1)
+        FROM dim_payments
+    )
+)
+SELECT AVG(CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(PaymentInstallments, ',', n.n), ',', -1) AS DECIMAL)) AS avg_installments
+FROM dim_payments
+JOIN numbers n 
+ON CHAR_LENGTH(PaymentInstallments) - CHAR_LENGTH(REPLACE(PaymentInstallments, ',', '')) >= n.n - 1
+WHERE PaymentInstallments IS NOT NULL AND TRIM(PaymentInstallments) != '';
+
+-- Query to count the total number of delayed orders
+SELECT COUNT(DISTINCT OrderID) AS DelayedOrders
+FROM fact_order_items
+WHERE DeliveryDelayDays <> 0;
+
+-- Query to get total revenue (in billions) by season
+SELECT 
+    dd.Season AS Season,
+    SUM(distinct_orders.PaymentValue) / 1e9 AS Total_Revenue_In_Billions
+FROM (
+    SELECT DISTINCT foi.OrderID, foi.OrderDateKey, foi.PaymentValue
+    FROM fact_order_items foi
+) AS distinct_orders
+JOIN dim_date dd ON distinct_orders.OrderDateKey = dd.DateKey
+GROUP BY dd.Season
+ORDER BY Total_Revenue_In_Billions DESC;
+
+-- Query to get total revenue (in billions) by season and month
+WITH Season_Revenue AS (
+    SELECT 
+        dd.Season AS Season,
+        SUM(distinct_orders.PaymentValue) / 1e9 AS Total_Revenue_In_Billions
+    FROM (
+        SELECT DISTINCT foi.OrderID, foi.OrderDateKey, foi.PaymentValue
+        FROM fact_order_items foi
+    ) AS distinct_orders
+    JOIN dim_date dd ON distinct_orders.OrderDateKey = dd.DateKey
+    GROUP BY dd.Season
+)
+SELECT 
+    dd.Season AS Season,
+    dd.MonthName AS MonthName,
+    SUM(distinct_orders.PaymentValue) / 1e9 AS Total_Revenue_In_Billions
+FROM (
+    SELECT DISTINCT foi.OrderID, foi.OrderDateKey, foi.PaymentValue
+    FROM fact_order_items foi
+) AS distinct_orders
+JOIN dim_date dd ON distinct_orders.OrderDateKey = dd.DateKey
+JOIN Season_Revenue sr ON dd.Season = sr.Season
+GROUP BY dd.Season, dd.MonthName
+ORDER BY sr.Total_Revenue_In_Billions DESC, Total_Revenue_In_Billions DESC;
+
+-- Query to get total orders by hour and time of day
+SELECT 
+    dt.Hour AS Hour, 
+    dt.TimeOfDay AS TimeOfDay,
+    COUNT(DISTINCT foi.OrderID)/1000 AS Total_Orders_in_K
+FROM fact_order_items foi
+JOIN dim_time dt ON foi.OrderTimeKey = dt.TimeKey
+GROUP BY dt.Hour, dt.TimeOfDay
+ORDER BY Total_Orders_in_K DESC;
+
+-- Query to get the most popular payment methods
+WITH RECURSIVE payment_split AS (
+    -- Initial extraction: first payment type and remaining part
+    SELECT 
+        PaymentID,
+        TRIM(SUBSTRING_INDEX(PaymentType, ',', 1)) AS PaymentType,
+        CASE 
+            WHEN LOCATE(',', PaymentType) > 0 THEN SUBSTRING(PaymentType, LOCATE(',', PaymentType) + 1)
+            ELSE NULL
+        END AS Remaining
+    FROM dim_payments
+
+    UNION ALL
+
+    -- Recursively extract next payment type
+    SELECT 
+        PaymentID,
+        TRIM(SUBSTRING_INDEX(Remaining, ',', 1)) AS PaymentType,
+        CASE 
+            WHEN LOCATE(',', Remaining) > 0 THEN SUBSTRING(Remaining, LOCATE(',', Remaining) + 1)
+            ELSE NULL
+        END AS Remaining
+    FROM payment_split
+    WHERE Remaining IS NOT NULL AND Remaining <> ''
+)
+SELECT 
+    PaymentType,
+    COUNT(*) AS PaymentCount  
+FROM payment_split
+WHERE PaymentType IS NOT NULL AND PaymentType <> ''  
+GROUP BY PaymentType
+ORDER BY PaymentCount DESC;
+
+-- Query to get total orders by state
+SELECT 
+    SUBSTRING_INDEX(du.UserState, ',', 1) AS State, 
+    COUNT(DISTINCT foi.OrderID) AS TotalOrders
+FROM fact_order_items foi
+JOIN dim_users du ON foi.UserID = du.UserID
+GROUP BY State
+ORDER BY TotalOrders DESC;
+
+-- Query to analyze logistics: total orders and delayed orders by user and seller city
+SELECT 
+    SUBSTRING_INDEX(du.UserCity, ',', 1) AS UserCity,  
+    ds.SellerCity,
+    COUNT(DISTINCT d.OrderID) AS TotalOrders,
+    SUM(CASE WHEN d.DeliveryDelayCheck = 'TRUE' THEN 1 ELSE 0 END) AS TotalOrdersDelayed
+FROM fact_order_items d
+JOIN dim_users du ON d.UserID = du.UserID
+JOIN dim_sellers ds ON d.SellerID = ds.SellerID
+GROUP BY UserCity, ds.SellerCity
+ORDER BY TotalOrders DESC;
+
+-- Query to analyze delivery performance: feedback scores vs delivery delay
+SELECT 
+    d.OrderID,
+    d.DeliveryDelayDays,
+    f.FeedbackScore
+FROM fact_order_items d
+JOIN dim_feedbacks f ON d.FeedbackID = f.FeedbackID;
+
+-- Query to get average shipping days by state
+SELECT 
+    SUBSTRING_INDEX(UserState, ',', 1) AS UserState,
+    AVG(ShippingDays) AS ShippingDays
+FROM fact_order_items foi
+WHERE foi.PickupDateKey <= foi.DeliveredDateKey
+GROUP BY SUBSTRING_INDEX(UserState, ',', 1)
+ORDER BY ShippingDays DESC;
+
+-- Query to get average shipping days by logistics
+SELECT 
+    SUBSTRING_INDEX(du.UserCity, ',', 1) AS UserCity,  
+    ds.SellerCity,
+    AVG(ShippingDays) AS ShippingDays
+FROM fact_order_items d
+JOIN dim_users du ON d.UserID = du.UserID
+JOIN dim_sellers ds ON d.SellerID = ds.SellerID
+WHERE d.PickupDateKey <= d.DeliveredDateKey
+GROUP BY du.UserCity, ds.SellerCity
+ORDER BY ShippingDays DESC;
+
+-- Query to get average delivery time difference (estimated vs actual)
+SELECT 
+    AVG(DATEDIFF(
+        dd.Date,  -- Actual Delivered Date
+        ed.Date   -- Estimated Delivery Date
+    )) AS AvgDeliveryDifference
+FROM fact_order_items foi
+JOIN dim_date ed ON foi.EstimatedDeliveryDateKey = ed.DateKey
+JOIN dim_date dd ON foi.DeliveredDateKey = dd.DateKey
+WHERE foi.PickupDateKey <= foi.DeliveredDateKey;
+
+-- Query to analyze sales spikes by order date
+SELECT 
+    DATE(dd.Date) AS OrderDate, 
+    COUNT(DISTINCT foi.OrderID) AS DistinctOrderCount
+FROM fact_order_items foi
+JOIN dim_date dd ON foi.OrderDateKey = dd.DateKey
+GROUP BY dd.Date
+ORDER BY dd.Date;
