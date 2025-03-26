@@ -6,4 +6,4 @@ sqlalchemy
 altair
 plotly
 seaborn
-pymysql
+mysql-connector-python
