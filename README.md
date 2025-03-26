@@ -1,2 +1,3 @@
 # Build-Project-Social-Signals-Unlocking-E-commerce-Trends
-This repository hosts the development of Build Project: Social Signals: Unlocking E-commerce Trends. The project focuses on creating a data pipeline that aggregates and analyzes e-commerce and social media data to provide actionable insights, enabling AI startups to enhance customer engagement and drive growth.
+This repository hosts the completed Build Project: Social Signals: Unlocking E-commerce Trends.
+The project successfully aggregates and analyzes e-commerce and social media data to provide actionable insights, helping AI startups enhance customer engagement and drive growth. Through this project, I implemented a robust data pipeline, performed comprehensive analyses, and created an interactive Streamlit dashboard to visualize key e-commerce trends. This project highlights seasonal patterns, order timing, payment preferences, and logistics performance to support informed business decisions.
